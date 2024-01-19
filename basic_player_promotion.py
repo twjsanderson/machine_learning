@@ -1,60 +1,139 @@
-# Import necessary libraries
 import pandas as pd
 import json
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
-
-# wetsern drafted U15
 
 class Promotion_ML:
     def run(self):
         with open('players_test.json', 'r') as json_file:
             data = json.load(json_file)
 
-        # Convert the JSON data to a DataFrame
-        test_players = data['test_players']
-        test_player_data = pd.DataFrame(test_players)
+        # -----------PLAYER DATA-----------
+        # Convert JSON player data to a DataFrame
+        players_data = pd.DataFrame(data['test_players'])
 
-        test_promotions = []
-        for player in test_players:
-            test_promotions.append(player['promoted'])
-        test_player_promotions = pd.Series(test_promotions)
+        # Transform 'born' & 'height'
+        players_data['born'] = pd.to_datetime(players_data['born'])
+        players_data[['height_feet', 'height_inches']] = players_data['height'].str.split("'", expand=True).astype(int)
 
-        print(test_players, test_promotions)
-        print(test_player_data, test_player_promotions)
+        # One-hot encode 'position', 'league', and 'shoots'
+        players_data = pd.get_dummies(players_data, columns=['position', 'league', 'shoots'],
+                                      prefix=['position', 'league', 'shoots'])
 
-        # # Split the data into training and testing sets
-        # X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
+        # Drop unnecessary columns
+        players_data = players_data.drop(['id', 'name'], axis=1)
 
-        # # Standardize the features
-        # scaler = StandardScaler()
-        # X_train = scaler.fit_transform(X_train)
-        # X_test = scaler.transform(X_test)
+        # Convert all columns to numeric
+        players_data = players_data.apply(pd.to_numeric, errors='coerce')
 
-        # # Create a RandomForestClassifier (you can choose another classifier based on your needs)
-        # classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+        # Impute missing values with the median
+        players_data = players_data.fillna(players_data.median())
 
-        # # Train the classifier
-        # classifier.fit(X_train, y_train)
+        # Replace infinite values with a large numeric value
+        players_data.replace([np.inf, -np.inf], np.nan, inplace=True)
+        players_data.fillna(1e10, inplace=True)  # Use a large numeric value, adjust as needed
 
-        # # Make predictions on the test set
-        # predictions = classifier.predict(X_test)
+        # -----------PROMOTION DATA-----------
+        # Convert JSON promotion data to a DataFrame
+        players_promotions = pd.DataFrame(data['test_promotions'])
 
-        # # Evaluate the model
-        # accuracy = accuracy_score(y_test, predictions)
-        # report = classification_report(y_test, predictions)
+        # Convert 'year_promoted' to datetime
+        players_promotions['year_promoted'] = pd.to_datetime(players_promotions['year_promoted'], format='%Y')
 
-        # print(f'Accuracy: {accuracy}')
-        # print('Classification Report:\n', report)
+        # Extract the year for classification
+        players_promotions['year_promoted'] = players_promotions['year_promoted'].dt.year
 
-        # # Now, you can use the trained model to predict whether a new player will be promoted
-        # new_player_data = pd.DataFrame([[new_feature1, new_feature2, new_feature3, ...]])
-        # new_player_data = scaler.transform(new_player_data)  # Standardize the new player's features
-        # prediction = classifier.predict(new_player_data)
+        # Drop unnecessary columns
+        players_promotions = players_promotions.drop(['id'], axis=1)
 
-        # print(f'The prediction for the new player is: {prediction}')
+        # Impute missing values in 'year_promoted' with the median
+        players_promotions['year_promoted'] = players_promotions['year_promoted'].fillna(players_promotions['year_promoted'].median())
+
+        # Replace infinite values in 'year_promoted' with a large numeric value
+        players_promotions.replace([np.inf, -np.inf], np.nan, inplace=True)
+        players_promotions['year_promoted'].fillna(1e10, inplace=True)  # Use a large numeric value, adjust as needed
+
+        # -----------START TRAINING-----------
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(players_data, players_promotions['promoted'], test_size=0.2, random_state=42)
+
+        # Standardize the features
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # Create a RandomForestClassifier
+        classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+
+        # Train the classifier
+        classifier.fit(X_train, y_train.astype(int))  # Ensure y_train is cast to int
+
+        # Make predictions on the test set
+        predictions = classifier.predict(X_test)
+
+        # Evaluate the model
+        accuracy = accuracy_score(y_test.astype(int), predictions)  # Ensure y_test is cast to int
+        report = classification_report(y_test.astype(int), predictions, zero_division=1)
+
+
+        print(f'Training Accuracy: {accuracy}')
+        print('Training Classification Report:\n', report)
+
+        # -----------MAKE PREDICTION FOR NEW PLAYER-----------
+        # did not make it
+        new_player = pd.DataFrame([{
+            "id": 13,
+            "name": "Ryan Ulmer",
+            "born": "2007-10-06",
+            "height": "5'9",
+            "weight": 154,
+            "shoots": "L",
+            "position": "F",
+            "league": "SAAHL U15",
+            "GP": 31,
+            "G": 25,
+            "A": 29,
+            "TP": 54,
+            "PIM": 12
+        }])
+
+        # Transform 'born' & 'height'
+        new_player['born'] = pd.to_datetime(new_player['born'])
+        new_player[['height_feet', 'height_inches']] = new_player['height'].str.split("'", expand=True).astype(int)
+
+        # One-hot encode 'position' and 'shoots' for the new player
+        new_player['position_' + new_player['position']] = 1
+        new_player['shoots_' + new_player['shoots']] = 1
+
+        # Drop the original 'position' and 'shoots' columns
+        new_player = new_player.drop(['position', 'shoots'], axis=1)
+
+        # Align the new player columns with the training data columns
+        new_player = new_player.reindex(columns=players_data.columns, fill_value=0)
+
+        # Convert all columns to numeric
+        new_player = new_player.apply(pd.to_numeric, errors='coerce')
+
+        # Impute missing values with the median
+        new_player = new_player.fillna(new_player.median())
+
+        # Replace infinite values with a large numeric value
+        new_player.replace([np.inf, -np.inf], np.nan, inplace=True)
+        new_player.fillna(1e10, inplace=True)  # Use a large numeric value, adjust as needed
+
+        # Ensure the new player data has the same columns as the training data
+        new_player = new_player.reindex(columns=players_data.columns, fill_value=0)
+
+        # Standardize the new player's features
+        new_player_data = scaler.transform(new_player)
+
+        # Make a prediction for the new player
+        new_player_prediction = classifier.predict(new_player_data)
+
+        print(f'The prediction for the new player is: {new_player_prediction}')
 
 
 if __name__ == '__main__':
